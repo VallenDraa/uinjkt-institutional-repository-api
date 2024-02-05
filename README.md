@@ -2,7 +2,7 @@
 
 ## Table Of Contents
 
-- [Intro] (#Intro)
+- [Intro](#intro)
 
 ### Intro
 
