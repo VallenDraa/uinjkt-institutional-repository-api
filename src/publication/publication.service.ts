@@ -1,6 +1,12 @@
-import { PUBLICATIONS_SEARCH_PATH } from './../common/constants';
-import { BadRequestException, Injectable } from '@nestjs/common';
-import puppeteer from 'puppeteer';
+import {
+  BASE_REPO_URL_WITH_DSPACE,
+  PUBLICATIONS_SEARCH_PATH,
+} from '../common/constants';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+} from '@nestjs/common';
 import {
   BASE_REPO_URL,
   PUBLICATION_FULLPATH,
@@ -11,49 +17,29 @@ import {
   NewestPublicationDto,
   PublicationSearchResultDto,
 } from './dto';
-import { PromiseHelper } from 'src/common/helpers/promise.helper';
 import { ResponseService } from 'src/response/response.service';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
 
 @Injectable()
 export class PublicationService {
   constructor(private responseService: ResponseService) {}
 
   async getNewestPublications() {
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
+    const { data } = await axios.get<string>(BASE_REPO_URL_WITH_DSPACE);
+    const $ = cheerio.load(data);
 
-    await Promise.allSettled([
-      page.goto(BASE_REPO_URL),
-      page.setViewport({ width: 1080, height: 1024 }),
-    ]);
+    const carouselItems = await $('.carousel-inner').children();
 
-    const carousel = await page.waitForSelector('.carousel-inner');
+    const results: NewestPublicationDto[] = [...carouselItems].map((el) => {
+      const id = this.parseIdFromURLPath($(el).find('a').attr('href'));
 
-    const resultsWithUnparsedId = await carousel.evaluate((carousel) => {
-      const carouselItems = [...carousel.children];
-
-      const newestPublications = carouselItems.map((item) => {
-        return {
-          url: item.querySelector('a').href,
-          title: item.querySelector('h4').innerText,
-          abstract: item.querySelector('p').innerText,
-        };
-      });
-
-      return newestPublications;
+      return {
+        id,
+        title: $(el).find('h4').text(),
+        abstract: $(el).find('p').text(),
+      };
     });
-
-    const results: NewestPublicationDto[] = resultsWithUnparsedId.map(
-      (publication) => {
-        return {
-          id: this.parseIdFromURLPath(publication.url),
-          title: publication.title,
-          abstract: publication.abstract,
-        };
-      },
-    );
-
-    await page.close();
 
     return this.responseService.normal(
       results,
@@ -62,55 +48,33 @@ export class PublicationService {
   }
 
   async getPublicationById(id: string) {
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
+    const { data } = await axios.get<string>(this.getPublicationPath(id));
+    const $ = cheerio.load(data);
 
-    await Promise.allSettled([
-      page.goto(this.getPublicationPath(id)),
-      page.setViewport({ width: 1080, height: 1024 }),
-    ]);
+    const getTextValue = (label: cheerio.Cheerio<cheerio.Element>) =>
+      label.next().text();
 
-    const selectorResults = await Promise.allSettled([
-      page.waitForSelector('.metadataFieldLabel ::-p-text(Title:)'),
-      page.waitForSelector('.metadataFieldLabel ::-p-text(Abstract:)'),
-      page.waitForSelector('.metadataFieldLabel ::-p-text(Authors:)'),
-      page.waitForSelector('.metadataFieldLabel ::-p-text(Advisors:)', {
-        timeout: 1000,
-      }),
-      page.waitForSelector('.metadataFieldLabel ::-p-text(Issue Date:)'),
-    ]);
+    const getPeopleTextValue = (label: cheerio.Cheerio<cheerio.Element>) =>
+      [...label.next().find('a')].map((link) => $(link).text());
 
-    const [
-      titleLabel,
-      abstractLabel,
-      authorsLabel,
-      advisorsLabel,
-      issueDateLabel,
-    ] = PromiseHelper.handleAllSettled(selectorResults);
-
-    const getTextValue = (label: Element) =>
-      label.nextElementSibling.textContent;
-
-    const getPeopleTextValue = (label: Element) => {
-      const links = [...label.nextElementSibling.querySelectorAll('a')];
-      return links.map((link) => link.textContent);
-    };
-
-    const title = await titleLabel?.evaluate(getTextValue);
-    const abstract = await abstractLabel?.evaluate(getTextValue);
-    const authors = (await authorsLabel?.evaluate(getPeopleTextValue)) ?? [];
-    const advisors = (await advisorsLabel?.evaluate(getPeopleTextValue)) ?? [];
-    const issueDate = new Date(
-      await issueDateLabel?.evaluate(getTextValue),
-    ).toISOString();
-
-    const downloadUrls = await page?.evaluate(() => {
-      const links = document.querySelectorAll(
-        '.panel.panel-info td[headers="t1"] > a[target="_blank"]',
-      );
-
-      return [...links].map((link) => (link as HTMLAnchorElement).href);
-    });
+    const title = getTextValue($('.metadataFieldLabel:contains("Title:")'));
+    const abstract = getTextValue(
+      $('.metadataFieldLabel:contains("Abstract:")'),
+    );
+    const authors = getPeopleTextValue(
+      $('.metadataFieldLabel:contains("Authors:")'),
+    );
+    const advisors = getPeopleTextValue(
+      $('.metadataFieldLabel:contains("Advisors:")'),
+    );
+    const unparsedIssueDate = getTextValue(
+      $('.metadataFieldLabel:contains("Issue Date:")'),
+    );
+    const issueDate =
+      unparsedIssueDate && new Date(unparsedIssueDate).toISOString();
+    const downloadUrls = [
+      ...$('.panel.panel-info td[headers="t1"] > a[target="_blank"]'),
+    ].map((el) => `${BASE_REPO_URL}${$(el).attr('href')}`);
 
     const result: PublicationDto = {
       id,
@@ -121,8 +85,6 @@ export class PublicationService {
       downloadUrls,
       issueDate,
     };
-
-    await page.close();
 
     return this.responseService.normal(
       result,
@@ -136,10 +98,6 @@ export class PublicationService {
     authors = '',
     issueDate = '',
   ) {
-    // Serializable error message
-    const desyncPageErrorMessage =
-      'Your page request is greater than the last page or lower than 1!';
-
     const url = this.getPublicationsSearchPath(
       currentPageRequest,
       query,
@@ -147,111 +105,91 @@ export class PublicationService {
       issueDate,
     );
 
-    const browser = await puppeteer.launch({ headless: true });
-    const page = await browser.newPage();
+    const { data } = await axios.get<string>(url);
+    const $ = cheerio.load(data);
 
-    await Promise.allSettled([
-      page.goto(url),
-      page.setViewport({ width: 1080, height: 1024 }),
-    ]);
+    // Get search result pages metadata from
+    // the pagination element in the repository site
+    const pagination = $('.pagination');
+    const paginationItems = [...pagination.children()];
+
+    const currentPage = parseInt(
+      pagination.find('.active > span').text() || '1',
+    );
+    const lastPage = $(paginationItems.at(-1)).hasClass('disabled')
+      ? currentPage
+      : parseInt($(paginationItems.at(-2)).children().first().text() || '1');
+    const nextPage = lastPage === currentPage ? currentPage : currentPage + 1;
+    const previousPage = currentPage === 1 ? currentPage : currentPage - 1;
+
+    if (currentPageRequest !== currentPage) {
+      throw new BadRequestException(
+        'Your page request is greater than the last page or lower than 1!',
+      );
+    }
+
+    // Get publications table result from the search
+    // result table element in the repository site
+    const searchResultsTable = $('.panel tbody');
+    if (searchResultsTable.length === 0) {
+      throw new InternalServerErrorException('Server fails to handle request!');
+    }
 
     const results: PublicationSearchResultDto[] =
-      (
-        await page.evaluate(() => {
-          const tableBody = document.querySelector('.panel tbody');
-
-          if (!tableBody) {
+      // Get the publication table rows inside the table body
+      searchResultsTable
+        .children()
+        // Convert the cheerio list to normal array for better handling
+        .toArray()
+        .map((tr, i) => {
+          // The first item in the array is the table
+          // header so we can just skip it altogether
+          if (i === 0) {
             return null;
           }
 
-          const trs = [...tableBody.children].slice(
-            1,
-            tableBody.children.length,
-          );
-          const data = trs
-            .map((tr) => {
-              const rowData = [...tr.children];
+          const rowData = [...$(tr).children()];
 
-              if (rowData.length < 4) {
-                return null;
-              }
-
-              const [issueDateRow, titleRow, authorsRow, advisorsRow] = rowData;
-
-              return {
-                url: (titleRow.firstChild as HTMLAnchorElement).href,
-                issueDate:
-                  issueDateRow.textContent !== '-'
-                    ? new Date(issueDateRow.textContent).toISOString()
-                    : null,
-                title: titleRow.firstChild.textContent,
-                authors: authorsRow.firstChild.textContent,
-                advisors: advisorsRow.firstChild.textContent,
-              };
-            })
-            .filter(Boolean);
-
-          return data;
-        })
-      )?.map((publication) => ({
-        id: this.parseIdFromURLPath(publication.url),
-        title: publication.title,
-        authors: publication.authors,
-        advisors: publication.advisors,
-        issueDate: publication.issueDate,
-      })) ?? [];
-
-    // Get search result pages metadata from
-    // the pagination element in the repository site.
-    try {
-      const pagesMetadata = await page.evaluate(
-        (currentPageRequest, desyncPageErrorMessage) => {
-          const pagination = document.querySelector('.pagination');
-          const paginationItems = [...pagination.children];
-
-          const currentPage = parseInt(
-            pagination.querySelector('.active > span')?.textContent || '1',
-          );
-
-          if (currentPageRequest !== currentPage) {
-            throw new Error(desyncPageErrorMessage);
+          // Skip any rows that doesn't have the 4 columns
+          // that the PublicationSearchResultsDto needs
+          if (rowData.length < 4) {
+            return null;
           }
 
-          const lastPage = paginationItems.at(-1).classList.contains('disabled')
-            ? currentPage
-            : parseInt(paginationItems.at(-2).firstChild.textContent || '1');
+          const [issueDateRow, titleRow, authorsRow, advisorsRow] = rowData;
 
-          const nextPage =
-            lastPage === currentPage ? currentPage : currentPage + 1;
-
-          const previousPage =
-            currentPage === 1 ? currentPage : currentPage - 1;
+          const publicationUrl = $(titleRow).children().first().attr('href');
+          const nonISOIssueDate = $(issueDateRow).text();
 
           return {
-            currentPage,
-            lastPage,
-            nextPage,
-            previousPage,
+            id: this.parseIdFromURLPath(publicationUrl),
+            issueDate:
+              nonISOIssueDate !== '-'
+                ? new Date(nonISOIssueDate).toISOString()
+                : null,
+            title: $(titleRow).children().first().text(),
+            authors: $(authorsRow).children().first().text(),
+            advisors: $(advisorsRow).children().first().text(),
           };
-        },
-        currentPageRequest,
-        desyncPageErrorMessage,
-      );
+        })
+        // Filter null items in the array, so that we get the publication data only
+        .filter(Boolean);
 
-      return this.responseService.paginated(
-        results,
-        pagesMetadata,
-        currentPageRequest > pagesMetadata.lastPage
-          ? 'Your page request is higher than the last available page!'
-          : 'Successfully searched publications.',
-      );
-    } catch (error) {
-      if (error instanceof Error) {
-        if (error.message === desyncPageErrorMessage) {
-          throw new BadRequestException(error.message);
-        }
-      }
-    }
+    // Construct the pagesMetada object
+    const pagesMetadata = {
+      currentPage,
+      lastPage,
+      nextPage,
+      previousPage,
+    };
+
+    return this.responseService.paginated(
+      results,
+      pagesMetadata,
+      currentPageRequest > pagesMetadata.lastPage
+        ? 'Your page request is higher than the last available page!'
+        : 'Successfully searched publications.',
+    );
   }
 
   private parseIdFromURLPath(urlPath: string) {
