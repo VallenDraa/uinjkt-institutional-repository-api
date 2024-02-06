@@ -18,15 +18,21 @@ import {
   PublicationSearchResultDto,
 } from './dto';
 import { ResponseService } from 'src/response/response.service';
-import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class PublicationService {
-  constructor(private responseService: ResponseService) {}
+  constructor(
+    private responseService: ResponseService,
+    private httpService: HttpService,
+  ) {}
 
   async getNewestPublications() {
-    const { data } = await axios.get<string>(BASE_REPO_URL_WITH_DSPACE);
+    const { data } = await firstValueFrom(
+      this.httpService.get<string>(BASE_REPO_URL_WITH_DSPACE),
+    );
     const $ = cheerio.load(data);
 
     const carouselItems = await $('.carousel-inner').children();
@@ -48,7 +54,9 @@ export class PublicationService {
   }
 
   async getPublicationById(id: string) {
-    const { data } = await axios.get<string>(this.getPublicationPath(id));
+    const { data } = await firstValueFrom(
+      this.httpService.get<string>(this.getPublicationPath(id)),
+    );
     const $ = cheerio.load(data);
 
     const getTextValue = (label: cheerio.Cheerio<cheerio.Element>) =>
@@ -105,7 +113,7 @@ export class PublicationService {
       issueDate,
     );
 
-    const { data } = await axios.get<string>(url);
+    const { data } = await firstValueFrom(this.httpService.get<string>(url));
     const $ = cheerio.load(data);
 
     // Get search result pages metadata from
