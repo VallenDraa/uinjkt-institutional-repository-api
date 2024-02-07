@@ -1,7 +1,16 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Query,
+  UseFilters,
+} from '@nestjs/common';
 import { PublicationService } from './publication.service';
+import { HttpExceptionFilter } from 'src/http-exception/http-exception.filter';
 
 @Controller('publications')
+@UseFilters(new HttpExceptionFilter())
 export class PublicationController {
   constructor(private publicationService: PublicationService) {}
 
