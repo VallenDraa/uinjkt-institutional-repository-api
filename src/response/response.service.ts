@@ -1,16 +1,18 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 
 @Injectable()
 export class ResponseService {
-  normal<T>(data: T, message = '') {
+  normal<T>(data: T, status: HttpStatus, message = '') {
     return {
       data,
+      status,
       message,
     };
   }
 
   paginated<T>(
     data: T,
+    status: HttpStatus,
     meta: {
       currentPage: number;
       previousPage: number;
@@ -21,6 +23,7 @@ export class ResponseService {
   ) {
     return {
       data,
+      status,
       meta,
       message,
     };

@@ -4,8 +4,10 @@ import {
 } from '../common/constants';
 import {
   BadRequestException,
+  HttpStatus,
   Injectable,
   InternalServerErrorException,
+  NotFoundException,
 } from '@nestjs/common';
 import {
   BASE_REPO_URL,
@@ -20,7 +22,8 @@ import {
 import { ResponseService } from 'src/response/response.service';
 import * as cheerio from 'cheerio';
 import { HttpService } from '@nestjs/axios';
-import { firstValueFrom } from 'rxjs';
+import { catchError, firstValueFrom } from 'rxjs';
+import { AxiosError } from 'axios';
 
 @Injectable()
 export class PublicationService {
@@ -42,28 +45,42 @@ export class PublicationService {
 
       return {
         id,
-        title: $(el).find('h4').text(),
-        abstract: $(el).find('p').text(),
+        title: $(el).find('h4').text().trim(),
+        abstract: $(el).find('p').text().trim(),
       };
     });
 
     return this.responseService.normal(
       results,
+      HttpStatus.OK,
       'Successfully get newest publication data.',
     );
   }
 
   async getPublicationById(id: string) {
     const { data } = await firstValueFrom(
-      this.httpService.get<string>(this.getPublicationPath(id)),
+      this.httpService.get<string>(this.getPublicationPath(id)).pipe(
+        catchError((error: AxiosError) => {
+          if (error.response.status === HttpStatus.NOT_FOUND) {
+            throw new NotFoundException(
+              `Publication with the id ${id} not found!`,
+            );
+          }
+
+          throw new InternalServerErrorException(
+            `Fail to get publication with the id ${id}!`,
+          );
+        }),
+      ),
     );
+
     const $ = cheerio.load(data);
 
     const getTextValue = (label: cheerio.Cheerio<cheerio.Element>) =>
-      label.next().text();
+      label.next().text().trim();
 
     const getPeopleTextValue = (label: cheerio.Cheerio<cheerio.Element>) =>
-      [...label.next().find('a')].map((link) => $(link).text());
+      [...label.next().find('a')].map((link) => $(link).text().trim());
 
     const title = getTextValue($('.metadataFieldLabel:contains("Title:")'));
     const abstract = getTextValue(
@@ -96,6 +113,7 @@ export class PublicationService {
 
     return this.responseService.normal(
       result,
+      HttpStatus.OK,
       `Successfully get publication with the id ${result.id}.`,
     );
   }
@@ -122,11 +140,13 @@ export class PublicationService {
     const paginationItems = [...pagination.children()];
 
     const currentPage = parseInt(
-      pagination.find('.active > span').text() || '1',
+      pagination.find('.active > span').text().trim() || '1',
     );
     const lastPage = $(paginationItems.at(-1)).hasClass('disabled')
       ? currentPage
-      : parseInt($(paginationItems.at(-2)).children().first().text() || '1');
+      : parseInt(
+          $(paginationItems.at(-2)).children().first().text().trim() || '1',
+        );
     const nextPage = lastPage === currentPage ? currentPage : currentPage + 1;
     const previousPage = currentPage === 1 ? currentPage : currentPage - 1;
 
@@ -167,7 +187,7 @@ export class PublicationService {
           const [issueDateRow, titleRow, authorsRow, advisorsRow] = rowData;
 
           const publicationUrl = $(titleRow).children().first().attr('href');
-          const nonISOIssueDate = $(issueDateRow).text();
+          const nonISOIssueDate = $(issueDateRow).text().trim();
 
           return {
             id: this.parseIdFromURLPath(publicationUrl),
@@ -175,9 +195,9 @@ export class PublicationService {
               nonISOIssueDate !== '-'
                 ? new Date(nonISOIssueDate).toISOString()
                 : null,
-            title: $(titleRow).children().first().text(),
-            authors: $(authorsRow).children().first().text(),
-            advisors: $(advisorsRow).children().first().text(),
+            title: $(titleRow).children().first().text().trim(),
+            authors: $(authorsRow).children().first().text().trim(),
+            advisors: $(advisorsRow).children().first().text().trim(),
           };
         })
         // Filter null items in the array, so that we get the publication data only
@@ -193,6 +213,9 @@ export class PublicationService {
 
     return this.responseService.paginated(
       results,
+      currentPageRequest > pagesMetadata.lastPage
+        ? HttpStatus.BAD_REQUEST
+        : HttpStatus.OK,
       pagesMetadata,
       currentPageRequest > pagesMetadata.lastPage
         ? 'Your page request is higher than the last available page!'

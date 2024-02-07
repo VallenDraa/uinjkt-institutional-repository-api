@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable } from '@nestjs/common';
 import { ResponseService } from './response/response.service';
 
 @Injectable()
@@ -8,6 +8,7 @@ export class AppService {
   homePage() {
     return this.responseService.normal(
       'Welcome to UINJKT Institutional Repository API!',
+      HttpStatus.OK,
       'Successfully accessed home page!',
     );
   }
