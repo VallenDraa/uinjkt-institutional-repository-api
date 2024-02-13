@@ -159,8 +159,16 @@ export class PublicationService {
     // Get publications table result from the search
     // result table element in the repository site
     const searchResultsTable = $('.panel tbody');
+
+    // If the search result table is empty,
+    // it means there is no search result
     if (searchResultsTable.length === 0) {
-      throw new InternalServerErrorException('Server fails to handle request!');
+      return this.responseService.paginated(
+        [],
+        HttpStatus.OK,
+        { currentPage: 1, lastPage: 1, nextPage: 1, previousPage: 1 },
+        'Successfully searched publications.',
+      );
     }
 
     const results: PublicationSearchResultDto[] =
