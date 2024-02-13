@@ -31,18 +31,22 @@ export class PublicationController {
       'Returns publications search results based on provided query parameter.',
   })
   @ApiQuery({
+    required: true,
     name: 'current_page',
     description: 'Current page of the publication search result.',
   })
   @ApiQuery({
+    required: false,
     name: 'query',
     description: 'Keyword for searching the publication.',
   })
   @ApiQuery({
+    required: false,
     name: 'authors',
     description: 'Search publications by the author.',
   })
   @ApiQuery({
+    required: false,
     name: 'issue_date',
     description: 'The date in which the publication is published.',
   })
@@ -52,6 +56,12 @@ export class PublicationController {
       example: {
         data: [{ id: '1', title: 'a', abstract: 'b' }],
         status: 200,
+        meta: {
+          currentPage: 1,
+          lastPage: 7342,
+          nextPage: 2,
+          previousPage: 1,
+        },
         message: '',
       },
     },
